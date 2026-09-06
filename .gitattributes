@@ -1,0 +1,12 @@
+* text=auto
+
+# shell 脚本必须保持 LF，否则 macOS/Linux 下可能报错
+run.sh text eol=lf
+
+# 批处理文件统一用 CRLF
+*.bat text eol=crlf
+
+# 其余文本默认 LF
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf

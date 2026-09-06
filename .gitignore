@@ -1,0 +1,16 @@
+# 运行时生成的结果文件，不需要上传
+答题结果.json
+
+# 以下文件仅本机开发/打包用（题库已内嵌进 .user.js），不随仓库分发
+quiz_bot.js
+config.json
+package.json
+run.sh
+答题.bat
+build_userscript.js
+研究生入学教育.json
+实验室安全.json
+
+# 系统文件
+.DS_Store
+Thumbs.db
