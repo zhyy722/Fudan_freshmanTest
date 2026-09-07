@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         复旦多平台自动答题（入学教育 + 实验室安全）
 // @namespace    https://github.com/
-// @version      1.1.0
+// @version      1.1.5
 // @description  自动识别网站并使用对应题库：eLearning 入学教育测验 / 实验室安全考试系统。单选/多选自动作答并翻页。无需 Node.js。
 // @author       zhy
 // @match        https://elearning.fudan.edu.cn/*
@@ -232,6 +232,35 @@
   }
 
   function getQuestionBlocks() {
+    // 实验室安全考试系统：自定义 div 行选项 + iCheck 样式 radio，无 Canvas 类名
+    if (SITE_ID === 'lsem') {
+      var box = document.querySelector('.test_right_content');
+      if (!box) return [];
+      var rows = Array.prototype.slice.call(
+        box.querySelectorAll('div.top_distance_10.padding_l_10')
+      ).filter(function (r) {
+        return r.querySelector('input[type=radio], input[type=checkbox]') && isVisible(r);
+      });
+      if (rows.length < 2) return [];
+      var options = rows.map(function (r) {
+        var inp = r.querySelector('input[type=radio], input[type=checkbox]');
+        // iCheck 系统要点击它自己的包装层才会正确登记答案
+        var ick = r.querySelector('.iradio_square-blue, .icheckbox_square-blue');
+        return { input: inp, el: ick || inp, text: textOf(r) };
+      });
+      var stemEl = rows[0].parentElement && rows[0].parentElement !== box
+        ? rows[0].parentElement
+        : box;
+      var stem = textOf(stemEl);
+      // 从题干容器里去掉各选项文字，剩下的就是题干
+      var byLen = rows.slice().sort(function (a, b) { return textOf(b).length - textOf(a).length; });
+      byLen.forEach(function (r) {
+        var t = textOf(r);
+        if (t) stem = stem.replace(t, '');
+      });
+      return [{ block: box, stemText: stem, options: options }];
+    }
+
     var sels = [
       '.question_holder', '.display_question', '.quiz-question',
       '.question-item', '.question', '[class*="question-item"]', '[class*="question"]'
@@ -263,6 +292,28 @@
   }
 
   function clickOption(opt) {
+    // 实验室考试系统：合成点击无法触发 iCheck，直接设置 checked 并同步界面
+    if (SITE_ID === 'lsem' && opt.input) {
+      var inp = opt.input;
+      var pageWin = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+      try {
+        if (pageWin.$ && pageWin.$.fn && pageWin.$.fn.iCheck) {
+          pageWin.$(inp).iCheck('check');
+        }
+      } catch (e) { /* noop */ }
+      if (!inp.checked) {
+        try { inp.checked = true; } catch (e) { /* noop */ }
+      }
+      try {
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) { /* noop */ }
+      try {
+        if (pageWin.$ && pageWin.$.fn && pageWin.$.fn.iCheck) {
+          pageWin.$(inp).iCheck('update');
+        }
+      } catch (e) { /* noop */ }
+      return !!inp.checked;
+    }
     try {
       opt.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       opt.el.click();
@@ -317,7 +368,7 @@
       '<span id="fudanqz-count">已答: 0 题</span><br>' +
       '<button id="fudanqz-toggle" style="margin-right:6px">开始自动答题</button>' +
       '<button id="fudanqz-diag" style="margin-right:6px">诊断并复制</button>' +
-      '<span style="color:#999">v1.1.0</span>' +
+      '<span style="color:#999">v1.1.5</span>' +
       '</div>';
     p.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99999;background:#fff;' +
       'border:1px solid #bbb;border-radius:8px;padding:10px 12px;box-shadow:0 2px 10px rgba(0,0,0,.2);';
@@ -401,13 +452,20 @@
   function answerOne(blockInfo) {
     var pageOpts = blockInfo.options.map(function (o) { return o.text; });
     var hit = findQuestion(blockInfo.stemText, pageOpts);
-    if (!hit) { logMsg('未命中题库，已跳过本页'); return false; }
-    if (hit.ambiguous) { logMsg('题干歧义，已跳过本页'); return false; }
+    if (!hit) { logMsg('未命中题库，跳过本题继续下一题'); return 'miss'; }
+    if (hit.ambiguous) { logMsg('题干歧义，跳过本题继续下一题'); return 'miss'; }
     var idxs = matchOptions(pageOpts, hit.item.correct);
-    if (!idxs.length) { logMsg('没有可点的匹配选项'); return false; }
-    idxs.forEach(function (i) { clickOption(blockInfo.options[i]); });
+    if (!idxs.length) { logMsg('题库命中但页面选项文字不匹配，跳过本题'); return 'miss'; }
+    var allOk = true;
+    idxs.forEach(function (i) {
+      if (!clickOption(blockInfo.options[i])) allOk = false;
+    });
+    if (!allOk) {
+      logMsg('选项勾选失败，停止翻页等待检查');
+      return 'fail';
+    }
     console.log('[自动答题] 已答: ' + hit.item.rawStem.slice(0, 30) + '... 选项数 ' + idxs.length);
-    return true;
+    return 'ok';
   }
 
   function runOnce() {
@@ -441,14 +499,23 @@
     console.log('[自动答题] 本页识别到 ' + blocks.length + ' 题');
 
     var newly = 0;
-    var anyMissed = false;
+    var anyMiss = false;
+    var anyFail = false;
     blocks.forEach(function (b) {
-      if (answerOne(b)) newly++;
-      else anyMissed = true;
+      var r = answerOne(b);
+      if (r === 'ok') newly++;
+      else if (r === 'miss') anyMiss = true;
+      else if (r === 'fail') anyFail = true;
     });
     addAnswered(newly);
     refreshPanel();
-    logMsg(anyMissed ? '本页有未命中的题' : ('已答 ' + totalAnswered() + ' 题'));
+
+    // 只有“匹配到但勾选失败”才停止；题库没有的题直接跳过继续
+    if (anyFail) {
+      logMsg('选项勾选失败，已停止翻页（请用“诊断并复制”反馈）');
+      return;
+    }
+    logMsg(anyMiss ? ('已答 ' + totalAnswered() + ' 题（本页有跳过）') : ('已答 ' + totalAnswered() + ' 题'));
 
     setTimeout(function () {
       var next = findButton(NEXT_TEXTS);
